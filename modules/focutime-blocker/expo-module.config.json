@@ -1,0 +1,9 @@
+{
+  "platforms": ["android", "ios"],
+  "android": {
+    "modules": ["expo.modules.focutimeblocker.FocuTimeBlockerModule"]
+  },
+  "ios": {
+    "modules": ["FocuTimeBlockerModule"]
+  }
+}
