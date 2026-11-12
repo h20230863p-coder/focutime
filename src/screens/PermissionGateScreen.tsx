@@ -17,8 +17,10 @@ import { RootStackParamList } from '../types';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import {
   getPermissionStatus,
+  isNativeBlockerAvailable,
   PermissionStatus,
   openAccessibilitySettings,
+  BLOCKING_UNAVAILABLE_MESSAGE,
 } from '../native-modules/AppBlocker';
 
 type PermissionGateScreenProps = {
@@ -187,6 +189,12 @@ function PermissionGateScreen({ navigation }: PermissionGateScreenProps) {
             Grant these permissions so FocuTime can block distracting apps during sessions.
           </Text>
         </View>
+
+        {!isNativeBlockerAvailable() && (
+          <View style={styles.devBuildBanner}>
+            <Text style={styles.devBuildBannerText}>{BLOCKING_UNAVAILABLE_MESSAGE}</Text>
+          </View>
+        )}
 
         {/* Progress indicator */}
         <View style={styles.progressContainer}>
@@ -357,6 +365,20 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 24,
+  },
+  devBuildBanner: {
+    backgroundColor: '#FFF8E1',
+    borderRadius: BORDER_RADIUS.sm,
+    borderWidth: 1,
+    borderColor: '#FFE082',
+    padding: SPACING.md,
+    marginBottom: SPACING.lg,
+  },
+  devBuildBannerText: {
+    fontSize: FONT_SIZES.sm,
+    color: '#8D6E63',
+    textAlign: 'center',
+    lineHeight: 20,
   },
   // Progress indicator
   progressContainer: {

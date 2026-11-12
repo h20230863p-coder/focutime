@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!-- Permission needed to read foreground app usage (granted by the user in Settings). -->
+  <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+  <!-- Overlay used for the "stay focused" layer. -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+  <!-- Android 11+ package visibility: lets us list launcher apps for the picker. -->
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.MAIN" />
+      <category android:name="android.intent.category.LAUNCHER" />
+    </intent>
+  </queries>
+
+  <application>
+
+    <!--
+      The accessibility service is what actually detects a blocked app coming to
+      the foreground. Without this declaration the OS never registers the service
+      and blocking can never fire.
+    -->
+    <service
+      android:name=".FocuTimeAccessibilityService"
+      android:exported="true"
+      android:label="@string/accessibility_service_label"
+      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+      <intent-filter>
+        <action android:name="android.accessibilityservice.AccessibilityService" />
+      </intent-filter>
+      <meta-data
+        android:name="android.accessibilityservice"
+        android:resource="@xml/accessibility_service_config" />
+    </service>
+
+    <service
+      android:name=".FocuTimeOverlayService"
+      android:exported="false" />
+
+    <!-- Full-screen "this app is blocked" screen shown by the accessibility service. -->
+    <activity
+      android:name=".BlockedAppActivity"
+      android:excludeFromRecents="true"
+      android:exported="false"
+      android:launchMode="singleTop"
+      android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
+    <receiver
+      android:name=".FocuTimeAdminReceiver"
+      android:exported="true"
+      android:permission="android.permission.BIND_DEVICE_ADMIN">
+      <meta-data
+        android:name="android.app.device_admin"
+        android:resource="@xml/device_admin" />
+      <intent-filter>
+        <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+      </intent-filter>
+    </receiver>
+
+  </application>
+</manifest>

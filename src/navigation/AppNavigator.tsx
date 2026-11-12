@@ -8,6 +8,7 @@ import { COLORS } from '../constants/theme';
 import OnboardingScreen from '../screens/OnboardingScreen';
 import TimerSetupScreen from '../screens/TimerSetupScreen';
 import PermissionGateScreen from '../screens/PermissionGateScreen';
+import AppSelectionScreen from '../screens/AppSelectionScreen';
 import FocusSessionScreen from '../screens/FocusSessionScreen';
 import SuggestionsScreen from '../screens/SuggestionsScreen';
 import AnalyticsScreen from '../screens/AnalyticsScreen';
@@ -57,6 +58,7 @@ export default function AppNavigator() {
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="TimerSetup" component={TimerSetupScreen} />
         <Stack.Screen name="PermissionGate" component={PermissionGateScreen} />
+        <Stack.Screen name="AppSelection" component={AppSelectionScreen} />
         <Stack.Screen
           name="FocusSession"
           component={FocusSessionScreen}

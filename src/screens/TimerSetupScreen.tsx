@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Image,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RootStackParamList } from '../types';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
@@ -17,6 +18,8 @@ import {
   incrementSessionCount,
   getSubscriptionState,
 } from '../utils/subscription';
+import { getBlockedApps } from '../utils/storage';
+import { isNativeBlockerAvailable } from '../native-modules/AppBlocker';
 
 type TimerSetupScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'TimerSetup'>;
@@ -29,10 +32,26 @@ export default function TimerSetupScreen({ navigation }: TimerSetupScreenProps) 
   const [isPremium, setIsPremium] = useState(false);
   const [sessionsUsed, setSessionsUsed] = useState(0);
   const [checking, setChecking] = useState(true);
+  const [blockedCount, setBlockedCount] = useState(0);
+
+  const nativeBlockerAvailable = isNativeBlockerAvailable();
 
   useEffect(() => {
     loadStatus();
   }, []);
+
+  // Keep the "N apps selected" row in sync when coming back from the picker.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      getBlockedApps().then((apps) => {
+        if (active) setBlockedCount(apps.length);
+      });
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
   const loadStatus = async () => {
     const sub = await getSubscriptionState();
@@ -163,6 +182,30 @@ export default function TimerSetupScreen({ navigation }: TimerSetupScreenProps) 
             </TouchableOpacity>
           ))}
         </View>
+
+        <TouchableOpacity
+          style={styles.appsRow}
+          onPress={() => navigation.navigate('AppSelection')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.appsRowIcon}>🚫</Text>
+          <View style={styles.appsRowInfo}>
+            <Text style={styles.appsRowTitle}>Choose apps to block</Text>
+            <Text style={styles.appsRowSubtitle}>
+              {blockedCount > 0
+                ? `${blockedCount} app${blockedCount === 1 ? '' : 's'} selected`
+                : 'No apps selected yet — tap to pick'}
+            </Text>
+          </View>
+          <Text style={styles.appsRowChevron}>›</Text>
+        </TouchableOpacity>
+
+        {!nativeBlockerAvailable && (
+          <Text style={styles.blockingUnavailable}>
+            App blocking needs the development build (npx expo run:android) —
+            Expo Go can only run the timer.
+          </Text>
+        )}
 
         <TouchableOpacity
           style={[styles.startButton, remaining <= 0 && !isPremium && styles.startButtonDisabled]}
@@ -308,6 +351,48 @@ const styles = StyleSheet.create({
   },
   presetTextSelected: {
     color: '#FFFFFF',
+  },
+  appsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    marginBottom: SPACING.md,
+  },
+  appsRowIcon: {
+    fontSize: 22,
+  },
+  appsRowInfo: {
+    flex: 1,
+  },
+  appsRowTitle: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  appsRowSubtitle: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  appsRowChevron: {
+    fontSize: FONT_SIZES.xl,
+    color: COLORS.textMuted,
+  },
+  blockingUnavailable: {
+    fontSize: FONT_SIZES.xs,
+    color: '#F57F17',
+    backgroundColor: '#FFF8E1',
+    borderRadius: BORDER_RADIUS.sm,
+    padding: SPACING.sm,
+    marginBottom: SPACING.md,
+    lineHeight: 17,
+    textAlign: 'center',
   },
   startButton: {
     backgroundColor: COLORS.primary,

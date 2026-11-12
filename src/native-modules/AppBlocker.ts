@@ -10,11 +10,33 @@
  * iOS:
  * - Full app blocking isn't available
  * - Provides Guided Access instructions and settings shortcut
+ *
+ * IMPORTANT: the native module only exists in a development build
+ * (`npx expo run:android`). In Expo Go it is undefined and blocking is
+ * impossible — the functions below report that honestly instead of pretending
+ * a session is being enforced.
  */
 
 import { Platform, NativeModules, Linking } from 'react-native';
 
 const { FocuTimeBlocker } = NativeModules;
+
+/** Shown whenever blocking cannot actually run. */
+export const BLOCKING_UNAVAILABLE_MESSAGE =
+  'App blocking needs the development build (npx expo run:android) — Expo Go cannot block apps.';
+
+export const IOS_BLOCKING_UNAVAILABLE_MESSAGE =
+  'iOS cannot block other apps. Use Guided Access (Settings → Accessibility → Guided Access) during a session.';
+
+export const ACCESSIBILITY_DISABLED_MESSAGE =
+  'FocuTime can\'t block anything until its Accessibility service is switched on. Tap to open Settings → Accessibility → Installed apps → FocuTime App Blocker.';
+
+export type BlockingError =
+  | 'native-module-missing'
+  | 'ios-not-supported'
+  | 'accessibility-disabled'
+  | 'no-apps-selected'
+  | 'unknown';
 
 export interface AppBlockerConfig {
   /** Package names (Android) or bundle IDs (iOS) to block */
@@ -25,8 +47,20 @@ export interface AppBlockerConfig {
 
 export interface AppBlockerResult {
   success: boolean;
-  error?: string;
+  error?: BlockingError | string;
   timeElapsedSeconds: number;
+  /** Number of apps actually handed to the native layer. */
+  blockedCount?: number;
+  /** Whether the accessibility service (the part that enforces the block) is on. */
+  accessibilityServiceEnabled?: boolean;
+}
+
+export interface InstalledApp {
+  /** Android package name, e.g. com.instagram.android */
+  package: string;
+  /** Human readable app name */
+  label: string;
+  isSystem: boolean;
 }
 
 export interface PermissionStatus {
@@ -48,10 +82,29 @@ export interface PermissionStep {
 }
 
 /**
+ * True only when the native blocker is actually linked into the running app.
+ * False in Expo Go, on web, and on iOS.
+ */
+export function isNativeBlockerAvailable(): boolean {
+  return (
+    Platform.OS === 'android' &&
+    !!FocuTimeBlocker &&
+    typeof FocuTimeBlocker.startBlocking === 'function'
+  );
+}
+
+/**
+ * Whether this platform/build can enforce app blocking at all.
+ */
+export function canBlockApps(): boolean {
+  return isNativeBlockerAvailable();
+}
+
+/**
  * Check all required permissions status for Android.
  */
 export async function getPermissionStatus(): Promise<PermissionStatus> {
-  if (Platform.OS === 'android' && FocuTimeBlocker) {
+  if (isNativeBlockerAvailable()) {
     try {
       const status = await FocuTimeBlocker.checkAllPermissions();
       return status as PermissionStatus;
@@ -79,7 +132,7 @@ export async function getPermissionStatus(): Promise<PermissionStatus> {
  * Opens system settings for the user to grant permission.
  */
 export async function requestUsageStatsPermission(): Promise<boolean> {
-  if (Platform.OS === 'android' && FocuTimeBlocker) {
+  if (isNativeBlockerAvailable()) {
     try {
       return await FocuTimeBlocker.requestUsageStatsPermission();
     } catch (e) {
@@ -92,48 +145,103 @@ export async function requestUsageStatsPermission(): Promise<boolean> {
 
 /**
  * Request overlay permission (Android).
- * Opens system settings for the user to allow overlay.
+ * Opens "Display over other apps" for FocuTime specifically.
  */
 export async function requestOverlayPermission(): Promise<boolean> {
-  if (Platform.OS === 'android') {
+  if (Platform.OS !== 'android') {
+    return true;
+  }
+  if (isNativeBlockerAvailable()) {
     try {
-      await Linking.openSettings();
-      return false;
+      return await FocuTimeBlocker.requestOverlayPermission();
     } catch (e) {
       console.error('[AppBlocker] Failed to open overlay settings', e);
       return false;
     }
   }
-  return true;
+  // Fallback for Expo Go: we cannot deep-link without the native module.
+  try {
+    await Linking.openSettings();
+  } catch (e) {
+    console.error('[AppBlocker] Failed to open settings', e);
+  }
+  return false;
 }
 
 /**
  * Open Android accessibility settings so the user can enable the service.
  */
 export async function openAccessibilitySettings(): Promise<void> {
-  if (Platform.OS === 'android') {
+  if (Platform.OS !== 'android') {
+    return;
+  }
+  if (isNativeBlockerAvailable()) {
     try {
-      await Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
-    } catch {
-      // Fallback: open general settings
-      try {
-        await Linking.openSettings();
-      } catch (e) {
-        console.error('[AppBlocker] Failed to open accessibility settings', e);
-      }
+      await FocuTimeBlocker.openAccessibilitySettings();
+      return;
+    } catch (e) {
+      console.error('[AppBlocker] Native accessibility settings failed', e);
+    }
+  }
+  try {
+    await Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
+  } catch {
+    try {
+      await Linking.openSettings();
+    } catch (e) {
+      console.error('[AppBlocker] Failed to open accessibility settings', e);
     }
   }
 }
 
 /**
- * Start blocking the specified apps for the given duration.
+ * Launcher apps the user can choose to block.
+ * Returns an empty list when the native module is missing (Expo Go).
  */
-export async function startBlocking(config: AppBlockerConfig): Promise<AppBlockerResult> {
-  if (!FocuTimeBlocker) {
-    console.warn('[AppBlocker] Native module not available — running in mock mode');
+export async function getInstalledApps(refresh = false): Promise<InstalledApp[]> {
+  if (!isNativeBlockerAvailable()) {
+    return [];
+  }
+  try {
+    const apps: InstalledApp[] = await FocuTimeBlocker.getInstalledApps(refresh);
+    return Array.isArray(apps) ? apps : [];
+  } catch (e) {
+    console.error('[AppBlocker] Failed to list installed apps', e);
+    return [];
+  }
+}
+
+/**
+ * Start blocking the specified apps for the given duration.
+ * Never reports success unless the native module is present and the
+ * accessibility service that enforces the block is enabled.
+ */
+export async function startBlocking(
+  config: AppBlockerConfig
+): Promise<AppBlockerResult> {
+  if (Platform.OS === 'ios') {
     return {
-      success: true,
-      timeElapsedSeconds: config.durationMinutes * 60,
+      success: false,
+      error: 'ios-not-supported',
+      timeElapsedSeconds: 0,
+    };
+  }
+
+  if (!isNativeBlockerAvailable()) {
+    console.warn('[AppBlocker] Native module missing — blocking cannot run');
+    return {
+      success: false,
+      error: 'native-module-missing',
+      timeElapsedSeconds: 0,
+    };
+  }
+
+  if (!config.blockedApps || config.blockedApps.length === 0) {
+    return {
+      success: false,
+      error: 'no-apps-selected',
+      timeElapsedSeconds: 0,
+      blockedCount: 0,
     };
   }
 
@@ -142,16 +250,30 @@ export async function startBlocking(config: AppBlockerConfig): Promise<AppBlocke
       config.blockedApps,
       config.durationMinutes
     );
+    const accessibilityServiceEnabled =
+      result?.accessibilityServiceEnabled !== false;
+
+    if (!accessibilityServiceEnabled) {
+      return {
+        success: false,
+        error: 'accessibility-disabled',
+        timeElapsedSeconds: 0,
+        blockedCount: config.blockedApps.length,
+        accessibilityServiceEnabled: false,
+      };
+    }
+
     return {
       success: true,
       timeElapsedSeconds: config.durationMinutes * 60,
-      ...(Platform.OS === 'ios' ? { guidedAccessRequired: result?.guidedAccessRequired } : {}),
+      blockedCount: config.blockedApps.length,
+      accessibilityServiceEnabled: true,
     };
   } catch (e) {
     console.error('[AppBlocker] Failed to start blocking', e);
     return {
       success: false,
-      error: String(e),
+      error: 'unknown',
       timeElapsedSeconds: 0,
     };
   }
@@ -161,7 +283,7 @@ export async function startBlocking(config: AppBlockerConfig): Promise<AppBlocke
  * Stop blocking and clean up.
  */
 export async function stopBlocking(): Promise<void> {
-  if (FocuTimeBlocker) {
+  if (isNativeBlockerAvailable()) {
     try {
       await FocuTimeBlocker.stopBlocking();
     } catch (e) {
@@ -174,7 +296,7 @@ export async function stopBlocking(): Promise<void> {
  * Check if overlay permission is granted (Android).
  */
 export function isOverlayPermissionGranted(): boolean {
-  return !(Platform.OS === 'android' && !FocuTimeBlocker);
+  return !(Platform.OS === 'android' && !isNativeBlockerAvailable());
 }
 
 /**
@@ -202,6 +324,24 @@ export async function getPendingPermissionSteps(): Promise<PermissionStep[]> {
     });
   }
 
+  // The accessibility service is what actually detects a blocked app opening.
+  if (!status.accessibilityServiceEnabled) {
+    steps.push({
+      id: 'accessibility',
+      title: 'Accessibility Service',
+      description:
+        'Switch on "FocuTime App Blocker" in Accessibility so FocuTime can spot a blocked app the moment you open it.',
+      icon: '♿',
+      key: 'accessibilityServiceEnabled',
+      actionLabel: 'Open Accessibility Settings',
+      action: async () => {
+        await openAccessibilitySettings();
+        return false;
+      },
+      required: true,
+    });
+  }
+
   if (!status.overlayGranted) {
     steps.push({
       id: 'overlay',
@@ -219,20 +359,21 @@ export async function getPendingPermissionSteps(): Promise<PermissionStep[]> {
 }
 
 /**
- * Get human-readable blocked app names.
+ * Package names of the apps most people want to block. Used to pre-tick the
+ * "Suggested" section in the app picker (matched by package *and* by label, so
+ * regional package variants like TikTok's com.zhiliaoapp.musically still match).
  */
-export const BLOCKED_APPS_DEFAULT = [
-  'com.instagram.android',
-  'com.facebook.katana',
-  'com.twitter.android',
-  'com.tiktok.android',
-  'com.snapchat.android',
-  'com.pinterest',
-  'com.reddit.frontpage',
-  'com.youtube.android',
-  'com.netflix.mediaclient',
-  'com.spotify.music',
-] as const;
+export const SUGGESTED_DISTRACTORS: { package: string; label: string }[] = [
+  { package: 'com.instagram.android', label: 'Instagram' },
+  { package: 'com.zhiliaoapp.musically', label: 'TikTok' },
+  { package: 'com.ss.android.ugc.trill', label: 'TikTok' },
+  { package: 'com.twitter.android', label: 'X' },
+  { package: 'com.google.android.youtube', label: 'YouTube' },
+  { package: 'com.reddit.frontpage', label: 'Reddit' },
+  { package: 'com.facebook.katana', label: 'Facebook' },
+  { package: 'com.snapchat.android', label: 'Snapchat' },
+  { package: 'com.netflix.mediaclient', label: 'Netflix' },
+];
 
 /**
  * Human-readable names for common blocked apps.
@@ -242,10 +383,12 @@ export const BLOCKED_APP_NAMES: Record<string, string> = {
   'com.facebook.katana': 'Facebook',
   'com.twitter.android': 'Twitter / X',
   'com.tiktok.android': 'TikTok',
+  'com.zhiliaoapp.musically': 'TikTok',
   'com.snapchat.android': 'Snapchat',
   'com.pinterest': 'Pinterest',
   'com.reddit.frontpage': 'Reddit',
   'com.youtube.android': 'YouTube',
+  'com.google.android.youtube': 'YouTube',
   'com.netflix.mediaclient': 'Netflix',
   'com.spotify.music': 'Spotify',
 };
