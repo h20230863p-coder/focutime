@@ -50,6 +50,7 @@ export type RootStackParamList = {
   Onboarding: undefined;
   TimerSetup: undefined;
   PermissionGate: undefined;
+  AppSelection: undefined;
   FocusSession: { duration: number };
   Suggestions: { sessionCompleted: boolean; duration: number };
   Analytics: undefined;

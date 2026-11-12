@@ -1,25 +1,28 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   SafeAreaView,
-  Platform,
   AppState,
   AppStateStatus,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RouteProp } from '@react-navigation/native';
+import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RootStackParamList, FocusSession } from '../types';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import {
   startBlocking,
   stopBlocking,
-  getPermissionStatus,
-  BLOCKED_APPS_DEFAULT,
+  openAccessibilitySettings,
+  BLOCKING_UNAVAILABLE_MESSAGE,
+  IOS_BLOCKING_UNAVAILABLE_MESSAGE,
+  ACCESSIBILITY_DISABLED_MESSAGE,
+  BlockingError,
 } from '../native-modules/AppBlocker';
+import { getBlockedApps } from '../utils/storage';
 
 type FocusSessionScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'FocusSession'>;
@@ -36,12 +39,52 @@ export default function FocusSessionScreen({
   const [isRunning, setIsRunning] = useState(true);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
   const [blockingActive, setBlockingActive] = useState(false);
+  const [blockingError, setBlockingError] = useState<BlockingError | null>(null);
+  const [blockedAppsCount, setBlockedAppsCount] = useState(0);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const sessionStartedRef = useRef(false);
+  const blockingActiveRef = useRef(false);
+  const firstFocusRef = useRef(true);
 
-  // Start app blocking when session begins
+  const updateBlocking = useCallback((active: boolean) => {
+    blockingActiveRef.current = active;
+    setBlockingActive(active);
+  }, []);
+
+  const initializeBlocking = useCallback(async () => {
+    try {
+      const blockedApps = await getBlockedApps();
+      setBlockedAppsCount(blockedApps.length);
+
+      if (blockedApps.length === 0) {
+        // Never claim blocking without a selection — point the user at the picker.
+        setBlockingError('no-apps-selected');
+        updateBlocking(false);
+        return;
+      }
+
+      const result = await startBlocking({
+        blockedApps,
+        durationMinutes: duration,
+      });
+
+      if (result.success) {
+        setBlockingError(null);
+        updateBlocking(true);
+      } else {
+        setBlockingError((result.error as BlockingError) ?? 'unknown');
+        updateBlocking(false);
+      }
+    } catch (e) {
+      console.error('[FocusSession] Blocking could not start', e);
+      setBlockingError('unknown');
+      updateBlocking(false);
+    }
+  }, [duration, updateBlocking]);
+
+  // Start app blocking when the session begins
   useEffect(() => {
     if (!sessionStartedRef.current) {
       sessionStartedRef.current = true;
@@ -49,11 +92,24 @@ export default function FocusSessionScreen({
     }
 
     return () => {
-      if (blockingActive) {
+      if (blockingActiveRef.current) {
         stopBlocking();
       }
     };
-  }, []);
+  }, [initializeBlocking]);
+
+  // Coming back from the app picker or the accessibility settings: try again.
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
+      if (!blockingActiveRef.current && sessionStartedRef.current) {
+        initializeBlocking();
+      }
+    }, [initializeBlocking])
+  );
 
   useEffect(() => {
     const subscription = AppState.addEventListener(
@@ -96,28 +152,11 @@ export default function FocusSessionScreen({
     };
   }, [isRunning]);
 
-  const initializeBlocking = async () => {
-    try {
-      // Check permissions and start blocking
-      const status = await getPermissionStatus();
-      if (Platform.OS === 'android' && !status.usageStatsGranted) {
-        // Silently continue — app still works as a timer without blocking
-        console.log('[FocusSession] UsageStats not granted — timer only mode');
-      }
-      const result = await startBlocking({
-        blockedApps: [...BLOCKED_APPS_DEFAULT],
-        durationMinutes: duration,
-      });
-      setBlockingActive(result.success);
-    } catch (e) {
-      console.log('[FocusSession] Blocking not available — timer only mode');
-    }
-  };
-
   const handleSessionComplete = async (completed: boolean) => {
     // Stop app blocking
-    if (blockingActive) {
+    if (blockingActiveRef.current) {
       await stopBlocking();
+      updateBlocking(false);
     }
 
     const secondsElapsed = totalSeconds - secondsRemaining;
@@ -176,6 +215,44 @@ export default function FocusSessionScreen({
 
   const progress = 1 - secondsRemaining / totalSeconds;
 
+  const banner = (() => {
+    if (blockingActive) return null;
+    switch (blockingError) {
+      case 'native-module-missing':
+        return {
+          text: BLOCKING_UNAVAILABLE_MESSAGE,
+          actionLabel: undefined as string | undefined,
+          onPress: undefined as (() => void) | undefined,
+        };
+      case 'ios-not-supported':
+        return {
+          text: IOS_BLOCKING_UNAVAILABLE_MESSAGE,
+          actionLabel: undefined,
+          onPress: undefined,
+        };
+      case 'accessibility-disabled':
+        return {
+          text: ACCESSIBILITY_DISABLED_MESSAGE,
+          actionLabel: 'Open Accessibility settings',
+          onPress: () => {
+            openAccessibilitySettings();
+          },
+        };
+      case 'no-apps-selected':
+        return {
+          text: 'No apps are selected, so nothing is being blocked. Your timer is running normally.',
+          actionLabel: 'Choose apps to block',
+          onPress: () => navigation.navigate('AppSelection'),
+        };
+      default:
+        return {
+          text: 'Distraction blocking could not start. Your timer is running normally.',
+          actionLabel: undefined,
+          onPress: undefined,
+        };
+    }
+  })();
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
@@ -202,8 +279,24 @@ export default function FocusSessionScreen({
         {blockingActive && (
           <View style={styles.blockingBadge}>
             <Text style={styles.blockingBadgeText}>
-              🔒 Distraction blocking active
+              🔒 Blocking {blockedAppsCount} app
+              {blockedAppsCount === 1 ? '' : 's'}
             </Text>
+          </View>
+        )}
+
+        {banner && (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>{banner.text}</Text>
+            {banner.actionLabel && banner.onPress && (
+              <TouchableOpacity
+                style={styles.bannerButton}
+                onPress={banner.onPress}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.bannerButtonText}>{banner.actionLabel}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -322,6 +415,32 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: FONT_SIZES.sm,
     fontWeight: '600',
+  },
+  banner: {
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    marginBottom: SPACING.md,
+    width: '100%',
+    gap: SPACING.sm,
+  },
+  bannerText: {
+    color: COLORS.text,
+    fontSize: FONT_SIZES.sm,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  bannerButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: BORDER_RADIUS.full,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    alignSelf: 'center',
+  },
+  bannerButtonText: {
+    color: '#FFFFFF',
+    fontSize: FONT_SIZES.sm,
+    fontWeight: '700',
   },
   controls: {
     flexDirection: 'row',

@@ -16,9 +16,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getPendingPermissionSteps,
   getPermissionStatus,
+  isNativeBlockerAvailable,
   PermissionStep,
-  PermissionStatus,
-  openAccessibilitySettings,
+  BLOCKING_UNAVAILABLE_MESSAGE,
 } from '../native-modules/AppBlocker';
 
 type PermissionsScreenProps = {
@@ -27,9 +27,10 @@ type PermissionsScreenProps = {
 
 export default function PermissionsScreen({ navigation }: PermissionsScreenProps) {
   const [steps, setSteps] = useState<PermissionStep[]>([]);
-  const [currentStatus, setCurrentStatus] = useState<PermissionStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkingStep, setCheckingStep] = useState<string | null>(null);
+
+  const nativeAvailable = isNativeBlockerAvailable();
 
   useEffect(() => {
     loadPermissions();
@@ -39,9 +40,7 @@ export default function PermissionsScreen({ navigation }: PermissionsScreenProps
     setLoading(true);
     try {
       const pendingSteps = await getPendingPermissionSteps();
-      const status = await getPermissionStatus();
       setSteps(pendingSteps);
-      setCurrentStatus(status);
     } catch (e) {
       console.error('[Permissions] Failed to load', e);
     } finally {
@@ -59,18 +58,7 @@ export default function PermissionsScreen({ navigation }: PermissionsScreenProps
     }, 2000);
   };
 
-  const handleOpenAccessibilitySettings = async () => {
-    setCheckingStep('accessibility');
-    await openAccessibilitySettings();
-    setTimeout(async () => {
-      await refreshPermissions();
-      setCheckingStep(null);
-    }, 2000);
-  };
-
   const refreshPermissions = async () => {
-    const status = await getPermissionStatus();
-    setCurrentStatus(status);
     const pendingSteps = await getPendingPermissionSteps();
     setSteps(pendingSteps);
   };
@@ -135,6 +123,13 @@ export default function PermissionsScreen({ navigation }: PermissionsScreenProps
           </Text>
         </View>
 
+        {!nativeAvailable && (
+          <View style={styles.devBuildBanner}>
+            <Text style={styles.devBuildBannerTitle}>Blocking is unavailable here</Text>
+            <Text style={styles.devBuildBannerText}>{BLOCKING_UNAVAILABLE_MESSAGE}</Text>
+          </View>
+        )}
+
         {allGranted ? (
           <View style={styles.allGrantedContainer}>
             <Text style={styles.grantedEmoji}>✅</Text>
@@ -172,40 +167,6 @@ export default function PermissionsScreen({ navigation }: PermissionsScreenProps
                 </View>
               );
             })}
-
-            {/* Accessibility Service step - separate since it's handled differently */}
-            {currentStatus && !currentStatus.accessibilityServiceEnabled && (
-              <View style={styles.stepCard}>
-                <View style={styles.stepHeader}>
-                  <Text style={styles.stepIcon}>♿</Text>
-                  <View style={styles.stepInfo}>
-                    <Text style={styles.stepTitle}>Accessibility Service</Text>
-                    <Text style={styles.stepDesc}>
-                      Enable FocuTime's accessibility service to detect when you open
-                      a blocked app and show a reminder.
-                    </Text>
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.stepButton, checkingStep === 'accessibility' && styles.stepButtonChecking]}
-                  onPress={handleOpenAccessibilitySettings}
-                  disabled={checkingStep === 'accessibility'}
-                  activeOpacity={0.7}
-                >
-                  {checkingStep === 'accessibility' ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.stepButtonText}>Open Accessibility Settings</Text>
-                  )}
-                </TouchableOpacity>
-
-                <Text style={styles.stepHint}>
-                  After opening Settings, find "FocuTime" under Installed Apps
-                  and toggle it on.
-                </Text>
-              </View>
-            )}
           </View>
         )}
 
@@ -279,6 +240,27 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 24,
+  },
+  devBuildBanner: {
+    backgroundColor: '#FFF8E1',
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    marginBottom: SPACING.lg,
+    borderWidth: 1,
+    borderColor: '#FFE082',
+    gap: SPACING.xs,
+  },
+  devBuildBannerTitle: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: '800',
+    color: '#F57F17',
+    textAlign: 'center',
+  },
+  devBuildBannerText: {
+    fontSize: FONT_SIZES.sm,
+    color: '#8D6E63',
+    textAlign: 'center',
+    lineHeight: 20,
   },
   // All granted state
   allGrantedContainer: {
